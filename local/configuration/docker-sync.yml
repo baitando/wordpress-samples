@@ -1,0 +1,6 @@
+version: "2"
+syncs:
+  webserver-volume:
+    src: ../volumes/webserver
+    sync_userid: 1000
+    sync_groupid: 1000

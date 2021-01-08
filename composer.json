@@ -1,0 +1,31 @@
+{
+    "name": "baitando/wordpress-samples",
+    "type": "project",
+    "authors": [
+        {
+            "name": "Andreas Hirsch",
+            "email": "andreas.hirsch@baitando.com"
+        }
+    ],
+    "require": {
+        "johnpbloch/wordpress": "5.6.0",
+        "wp-cli/wp-cli-bundle": "*"
+    },
+    "extra": {
+        "wordpress-install-dir": "target/build",
+        "installer-paths": {
+            "target/build/wp-content/plugins/{$name}/": [
+                "type:wordpress-plugin"
+            ],
+            "target/build/wp-content/themes/{$name}/": [
+                "type:wordpress-theme"
+            ]
+        }
+    },
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "https://wpackagist.org"
+        }
+    ]
+}

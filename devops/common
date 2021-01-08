@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+log_info() {
+  script_name=${0##*/}
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "== $script_name $timestamp $1"
+}
+
+log_error() {
+  script_name=${0##*/}
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo -e "\n${RED}== $script_name $timestamp $1${NC}\n"
+}
+
+log_duration() {
+  sleep 2
+  hours=$((SECONDS / 3600))
+  minutes=$((SECONDS % 3600 / 60))
+  seconds=$((SECONDS % 60))
+  log_info "Execution took ${hours}h ${minutes}min ${seconds}sec"
+}
+
+check_required_variable() {
+  if [ -z "${!1+x}" ]; then
+    log_error "Required variable $1 not set"
+    exit 1
+  fi
+}

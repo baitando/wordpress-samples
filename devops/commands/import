@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -e
+. "$BAITANDO_WORKDIR/common"
+
+cli_help_import() {
+  echo "
+Command: import <environment>
+
+Imports data to the given environment. The imported data consists
+of the files contained in wp-content/uploads and dumps of the
+Wordpress and CiviCRM databases.
+
+The import is loaded from the configured directory and must consist
+of the webserver.tar.gz, database-wordpress.sql.gz and
+database-civicrm.tar.gz files.
+
+Environments:
+  test    Test environment
+"
+  exit 0
+}
+
+cli_import() {
+  environment=$1
+  log_info "Executing import for environment $environment"
+
+  check "$environment"
+  clean "$environment"
+  prepare "$environment"
+  upload "$environment"
+
+  log_info "Import finished"
+}
+
+check() {
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  log_info "Checking prerequisites"
+  check_required_variable "BAITANDO_IMPORT_DIR"
+  check_required_variable "BAITANDO_EXPORT_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_CONNECTION"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_WEB_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_WP_DB_NAME"
+  check_required_variable "BAITANDO_${environment_upper}_WP_DB_HOST"
+  check_required_variable "BAITANDO_${environment_upper}_SITEURL"
+  check_required_variable "BAITANDO_${environment_upper}_IMPORT_ENV"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_PHP"
+}
+
+clean() {
+  environment="$1"
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+  import_dir="$BAITANDO_IMPORT_DIR/$environment"
+  import_archive_dir="$import_dir/archive"
+  import_exploded_dir="$import_dir/exploded"
+
+  log_info "Clean output directory $import_dir"
+  rm -rf "$import_dir"
+  mkdir -p "$import_archive_dir"
+  mkdir -p "$import_exploded_dir"
+}
+
+prepare() {
+  environment="$1"
+  import_dir="$BAITANDO_IMPORT_DIR/$environment"
+
+  src_env=$(name="BAITANDO_${environment_upper}_IMPORT_ENV" && echo "${!name}")
+
+  data_dir="$BAITANDO_EXPORT_DIR/$src_env"
+  import_archive_dir="$import_dir/archive"
+  import_exploded_dir="$import_dir/exploded"
+
+
+
+  gunzip < "$data_dir/db.sql.gz" | sed -e 's/DEFINER[ ]*=[ ]*[^*]*\*/\*/' | gzip -c > "$import_archive_dir/db.sql.gz"
+
+  tar -C "$import_exploded_dir" -xzf "$data_dir/data.tar.gz"
+  tar -czf "$import_archive_dir/data.tar.gz" -C "$import_exploded_dir" .
+}
+
+upload() {
+  environment="$1"
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+  import_dir="$BAITANDO_IMPORT_DIR/$environment"
+  import_archive_dir="$import_dir/archive"
+
+  server=$(name="BAITANDO_${environment_upper}_CONNECTION" && echo "${!name}")
+  remote_import_dir=$(name="BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR" && echo "${!name}")
+  remote_webserver_dir=$(name="BAITANDO_${environment_upper}_REMOTE_WEB_DIR" && echo "${!name}")
+
+  wp_db_name=$(name="BAITANDO_${environment_upper}_WP_DB_NAME" && echo "${!name}")
+  wp_db_host=$(name="BAITANDO_${environment_upper}_WP_DB_HOST" && echo "${!name}")
+  wp_db_user=$(name="BAITANDO_${environment_upper}_WP_DB_USER" && echo "${!name}")
+  wp_db_password=$(name="BAITANDO_${environment_upper}_WP_DB_PASSWORD" && echo "${!name}")
+
+  php_command=$(name="BAITANDO_${environment_upper}_REMOTE_PHP" && echo "${!name}")
+  src_env=$(name="BAITANDO_${environment_upper}_IMPORT_ENV" && echo "${!name}")
+  src_env_upper=$(echo "$src_env" | tr [":lower:"] [":upper:"])
+  src_siteurl=$(name="BAITANDO_${src_env_upper}_SITEURL" && echo "${!name}")
+  target_siteurl=$(name="BAITANDO_${environment_upper}_SITEURL" && echo "${!name}")
+
+  ssh -T "$server" "bash -s $remote_import_dir" << 'EOF'
+
+    remote_import_dir="$1"
+
+    rm -f "$remote_import_dir/webserver.tar.gz"
+    rm -f "$remote_import_dir/database-wordpress.sql.gz"
+    rm -f "$remote_import_dir/database-civicrm.sql.gz"
+    mkdir -p $remote_import_dir
+EOF
+
+  scp "$import_archive_dir/data.tar.gz" "$server":"$remote_import_dir/data.tar.gz"
+  scp "$import_archive_dir/db.sql.gz" "$server":"$remote_import_dir/db.sql.gz"
+
+  ssh -T "$server" "bash -s $remote_import_dir $remote_webserver_dir $wp_db_name $wp_db_host $wp_db_user $wp_db_password $php_command $src_siteurl $target_siteurl" << 'EOF'
+    remote_import_dir="$1"
+    remote_webserver_dir="$2"
+
+    wp_db_name="$3"
+    wp_db_host="$4"
+    wp_db_user="$5"
+    wp_db_password="$6"
+
+    php_command="$7"
+    src_siteurl="$8"
+    target_siteurl="$9"
+
+    defaults_file="$remote_import_dir/.my.cnf"
+
+    rm -rf "$remote_webserver_dir/wp-content/uploads"
+    tar -C "$remote_webserver_dir" -xzf "$remote_import_dir/data.tar.gz"
+
+    rm -f "$defaults_file"
+
+    echo "
+[mysql]
+user=$wp_db_user
+password=$wp_db_password
+    " >>"$defaults_file"
+
+    gunzip < "$remote_import_dir/db.sql.gz" | mysql --defaults-file="$defaults_file" --host "$wp_db_host" "$wp_db_name"
+
+    cd "$remote_import_dir"
+    rm -f "$remote_import_dir/wp-cli.phar"
+    curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+
+    cd "$remote_webserver_dir"
+    "$php_command" "$remote_import_dir/wp-cli.phar" search-replace "$src_siteurl" "$target_siteurl" "*"
+
+    rm -f "$defaults_file"
+    rm -f "$remote_import_dir/wp-cli.phar"
+EOF
+}
+
+case "$1" in
+help | h)
+  cli_help_import
+  ;;
+test)
+  cli_import test
+  ;;
+*)
+  cli_help_import
+  ;;
+esac

@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -e
+. "$BAITANDO_WORKDIR/common"
+
+cli_help_init() {
+  echo "
+Command: init <environment>
+
+Initializes an environment. Make sure to run baitando build before.
+
+Environments:
+  test    Test environment
+"
+  exit 0
+}
+
+cli_init() {
+  environment=$1
+  log_info "Initializing environment $environment"
+
+  check "$environment"
+  clean "$environment"
+  init "$environment"
+  secureIfDesired "$environment"
+
+  log_info "Init finished"
+}
+
+check() {
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  log_info "Checking prerequisites"
+  check_required_variable "BAITANDO_BUILD_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_CONNECTION"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_WEB_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_PHP"
+  check_required_variable "BAITANDO_${environment_upper}_WP_DB_NAME"
+  check_required_variable "BAITANDO_${environment_upper}_WP_DB_USER"
+  check_required_variable "BAITANDO_${environment_upper}_WP_DB_PASSWORD"
+  check_required_variable "BAITANDO_${environment_upper}_WP_DB_HOST"
+}
+
+clean() {
+  environment="$1"
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  connection=$(name="BAITANDO_${environment_upper}_CONNECTION" && echo "${!name}")
+  remote_webserver_dir=$(name="BAITANDO_${environment_upper}_REMOTE_WEB_DIR" && echo "${!name}")
+
+  ssh -T "$connection" "bash -s $remote_webserver_dir" << 'EOF'
+    remote_webserver_dir="$1"
+    rm -f "$remote_webserver_dir/wp-config.php"
+EOF
+}
+
+init() {
+  environment="$1"
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  wp_db_name=$(name="BAITANDO_${environment_upper}_WP_DB_NAME" && echo "${!name}")
+  wp_db_user=$(name="BAITANDO_${environment_upper}_WP_DB_USER" && echo "${!name}")
+  wp_db_password=$(name="BAITANDO_${environment_upper}_WP_DB_PASSWORD" && echo "${!name}")
+  wp_db_host=$(name="BAITANDO_${environment_upper}_WP_DB_HOST" && echo "${!name}")
+  wp_db_prefix=$(name="BAITANDO_${environment_upper}_WP_DB_PREFIX" && echo "${!name}")
+
+  connection=$(name="BAITANDO_${environment_upper}_CONNECTION" && echo "${!name}")
+  remote_devops_dir=$(name="BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR" && echo "${!name}")
+  remote_webserver_dir=$(name="BAITANDO_${environment_upper}_REMOTE_WEB_DIR" && echo "${!name}")
+  remote_php=$(name="BAITANDO_${environment_upper}_REMOTE_PHP" && echo "${!name}")
+
+  ssh -T "$connection" "bash -s $remote_devops_dir $remote_webserver_dir $remote_php $wp_db_name $wp_db_user $wp_db_password $wp_db_host $wp_db_prefix" << 'EOF'
+    remote_devops_dir="$1"
+    remote_webserver_dir="$2"
+    remote_php="$3"
+    wp_db_name="$4"
+    wp_db_user="$5"
+    wp_db_password="$6"
+    wp_db_host="$7"
+    wp_db_prefix="$8"
+
+    mkdir -p $remote_devops_dir
+    cd "$remote_devops_dir"
+    rm -f "$remote_devops_dir/wp-cli.phar"
+    curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+
+    mkdir -p $remote_webserver_dir
+    cd "$remote_webserver_dir"
+    "$remote_php" "$remote_devops_dir/wp-cli.phar" config create \
+      --dbname="$wp_db_name" \
+      --dbuser="$wp_db_user" \
+      --dbpass="$wp_db_password" \
+      --dbhost="$wp_db_host" \
+      --dbprefix="$wp_db_prefix"
+EOF
+}
+
+secureIfDesired() {
+  environment="$1"
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  remote_devops_dir=$(name="BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR" && echo "${!name}")
+  remote_webserver_dir=$(name="BAITANDO_${environment_upper}_REMOTE_WEB_DIR" && echo "${!name}")
+
+  basic_user=$(name="BAITANDO_${environment_upper}_BASIC_USER" && echo "${!name}")
+  basic_password=$(name="BAITANDO_${environment_upper}_BASIC_PASSWORD" && echo "${!name}")
+
+  if [ -n "${basic_user}" ] && [ -n "${basic_password}" ]; then
+    log_info "Securing with HTTP Basic Auth"
+
+    ssh -T "$connection" "bash -s $remote_devops_dir $remote_webserver_dir $basic_user $basic_password" << 'EOF'
+
+    remote_devops_dir="$1"
+    remote_webserver_dir="$2"
+    basic_user="$3"
+    basic_password="$4"
+
+    rm -f "$remote_devops_dir/.htpasswd"
+    htpasswd -dbc "$remote_devops_dir/.htpasswd" "$basic_user" "$basic_password"
+
+    echo "
+
+AuthType Basic
+AuthName \"Protected Area\"
+AuthUserFile "$remote_devops_dir/.htpasswd"
+Require valid-user
+    " >>"$remote_webserver_dir/.htaccess"
+EOF
+  fi
+}
+
+case "$1" in
+help | h)
+  cli_help_init
+  ;;
+test)
+  cli_init test
+  ;;
+prod)
+  cli_init prod
+  ;;
+*)
+  cli_help_init
+  ;;
+esac

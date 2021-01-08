@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -e
+. "$BAITANDO_WORKDIR/common"
+
+cli_help_build() {
+  echo "
+Command: build"
+  exit 1
+}
+
+cli_build() {
+  check
+
+  rm -rf "$BAITANDO_ROOTDIR/vendor"
+
+  log_info "Clean output directory ${BAITANDO_BUILD_DIR}"
+  rm -rf "${BAITANDO_BUILD_DIR}"
+  mkdir -p "${BAITANDO_BUILD_DIR}"
+
+  log_info "Updating dependencies"
+  composer update
+
+  log_info "Loading dependencies"
+  composer install
+
+  log_info "Adding custom sources"
+  cp -r "${BAITANDO_SRC_DIR}/" "${BAITANDO_BUILD_DIR}/"
+
+  log_info "Build finished"
+  log_info "Build result provided in ${BAITANDO_BUILD_DIR}"
+}
+
+check() {
+  log_info "Checking prerequisites"
+  check_required_variable "BAITANDO_SRC_DIR"
+  check_required_variable "BAITANDO_BUILD_DIR"
+}
+
+case "$1" in
+help | h)
+  cli_help_build
+  ;;
+*)
+  cli_build
+  ;;
+esac

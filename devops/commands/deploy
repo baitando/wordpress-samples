@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -e
+. "$BAITANDO_WORKDIR/common"
+
+cli_help_deploy() {
+  echo "
+Command: deploy <environment>
+
+Deploys the Wordpress files to the given environment. The data
+of the environment consisting of the wp-content/uploads directory
+and the Wordpress and CiviCRM databases remains untouched.
+
+Environments:
+  test    Test environment
+  prod    Prod environment
+"
+  exit 0
+}
+
+cli_deploy() {
+  environment=$1
+  log_info "Executing deployment for environment $environment"
+
+  check "$environment"
+  clean "$environment"
+  prepare "$environment"
+  upload "$environment"
+
+  log_info "Deployment finished"
+}
+
+check() {
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  log_info "Checking prerequisites"
+  check_required_variable "BAITANDO_BUILD_DIR"
+  check_required_variable "BAITANDO_DEPLOY_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_CONNECTION"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_WEB_DIR"
+}
+
+clean() {
+  environment="$1"
+  deploy_dir="$BAITANDO_DEPLOY_DIR/$environment"
+  deploy_exploded_dir="$deploy_dir/exploded"
+  deploy_archive_dir="$deploy_dir/archive"
+
+  log_info "Clean output directory $deploy_dir"
+  rm -rf "$deploy_dir"
+  mkdir -p "$deploy_dir"
+  mkdir -p "$deploy_exploded_dir"
+  mkdir -p "$deploy_archive_dir"
+}
+
+prepare() {
+  log_info "Prepare deployment files"
+  environment="$1"
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  build_dir="$BAITANDO_BUILD_DIR"
+  deploy_dir="$BAITANDO_DEPLOY_DIR/$environment"
+  deploy_exploded_dir="$deploy_dir/exploded"
+  deploy_archive_dir="$deploy_dir/archive"
+
+  log_info "Copy build result to deploy directory"
+  cp -r "$build_dir/" "$deploy_exploded_dir/"
+
+  tar -czf "$deploy_archive_dir/deploy.tar.gz" -C "$deploy_exploded_dir" .
+}
+
+upload() {
+  log_info "Upload deployment files to remote connection"
+  environment="$1"
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  deploy_dir="$BAITANDO_DEPLOY_DIR/$environment"
+  deploy_archive_dir="$deploy_dir/archive"
+
+  connection=$(name="BAITANDO_${environment_upper}_CONNECTION" && echo "${!name}")
+  remote_devops_dir=$(name="BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR" && echo "${!name}")
+  remote_web_dir=$(name="BAITANDO_${environment_upper}_REMOTE_WEB_DIR" && echo "${!name}")
+
+  ssh -T "$connection" "bash -s $remote_devops_dir" << 'EOF'
+    remote_devops_dir="$1"
+
+    rm -f "$remote_devops_dir/deploy.tar.gz"
+    mkdir -p $remote_devops_dir
+EOF
+
+  scp "$deploy_archive_dir/deploy.tar.gz" "$connection":"$remote_devops_dir/deploy.tar.gz"
+
+  ssh -T "$connection" "bash -s $remote_devops_dir $remote_web_dir" << 'EOF'
+
+  remote_devops_dir="$1"
+  remote_web_dir="$2"
+
+  mkdir -p "$remote_web_dir"
+
+  find "$remote_web_dir" -maxdepth 1 -type f -not -name 'wp-config.php' 2>/dev/null | xargs -r rm
+  find "$remote_web_dir" -mindepth 1 -maxdepth 1 -type d -not -name 'wp-content' 2>/dev/null | xargs -r rm -r
+  find "$remote_web_dir/wp-content" -mindepth 1 -maxdepth 1 -type d -not -name 'uploads' 2>/dev/null | xargs -r rm -r
+
+  tar -C "$remote_web_dir" -xzf "$remote_devops_dir/deploy.tar.gz"
+  rm -f "$remote_devops_dir/deploy.tar.gz"
+EOF
+}
+
+case "$1" in
+help | h)
+  cli_help_deploy
+  ;;
+test)
+  cli_deploy test
+  ;;
+prod)
+  cli_deploy prod
+  ;;
+*)
+  cli_help_deploy
+  ;;
+esac

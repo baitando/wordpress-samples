@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -e
+. "$BAITANDO_WORKDIR/common"
+
+cli_help_devops() {
+  echo "
+Command: devops <environment>
+
+Exports data of the given environment. The devopsed data consists
+of the files contained in wp-content/uploads and dumps of the
+Wordpress and CiviCRM databases.
+
+The devops is provided in the configured directory and consists
+of the webserver.tar.gz, database-wordpress.sql.gz and
+database-civicrm.tar.gz files.
+
+Environments:
+  test    Test environment
+  prod    Prod environment
+"
+  exit 0
+}
+
+cli_devops() {
+  environment=$1
+  log_info "Executing devops for environment $environment"
+  devops_dir="$BAITANDO_EXPORT_DIR/$environment"
+
+  check "$environment"
+  clean "$environment"
+  prepare "$environment"
+  download "$environment"
+
+  log_info "Export finished"
+  log_info "Export result provided in $devops_dir"
+}
+
+check() {
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  log_info "Checking prerequisites"
+  check_required_variable "BAITANDO_EXPORT_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_CONNECTION"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_REMOTE_WEB_DIR"
+  check_required_variable "BAITANDO_${environment_upper}_WP_DB_NAME"
+}
+
+clean() {
+  environment="$1"
+  devops_dir="$BAITANDO_EXPORT_DIR/$environment"
+
+  log_info "Clean output directory $devops_dir"
+  rm -rf "$devops_dir"
+  mkdir -p "$devops_dir"
+}
+
+prepare() {
+  log_info "Export data on remote connection"
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  connection=$(name="BAITANDO_${environment_upper}_CONNECTION" && echo "${!name}")
+  remote_devops_dir=$(name="BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR" && echo "${!name}")
+  remote_web_dir=$(name="BAITANDO_${environment_upper}_REMOTE_WEB_DIR" && echo "${!name}")
+  wp_db_name=$(name="BAITANDO_${environment_upper}_WP_DB_NAME" && echo "${!name}")
+  wp_db_user=$(name="BAITANDO_${environment_upper}_WP_DB_USER" && echo "${!name}")
+  wp_db_password=$(name="BAITANDO_${environment_upper}_WP_DB_PASSWORD" && echo "${!name}")
+  wp_db_host=$(name="BAITANDO_${environment_upper}_WP_DB_HOST" && echo "${!name}")
+
+  ssh -T "$connection" "bash -s $remote_devops_dir $remote_web_dir $wp_db_name $wp_db_user $wp_db_password $wp_db_host" <<'EOF'
+    devops_dir=$1
+    webserver_dir=$2
+    wp_db_name=$3
+    wp_db_user=$4
+    wp_db_password=$5
+    wp_db_host=$6
+
+    wordpress_data_file="$devops_dir/data.tar.gz"
+    wordpress_db_file="$devops_dir/db.sql.gz"
+
+    defaults_file="$devops_dir/.my.cnf"
+
+    mkdir -p "$devops_dir"
+    rm -f "$wordpress_data_file"
+    rm -f "$wordpress_db_file"
+    rm -f "$defaults_file"
+
+    echo "
+[mysqldump]
+user=$wp_db_user
+password=$wp_db_password
+    " >>"$defaults_file"
+
+    cd "$devops_dir"
+    mkdir -p "$webserver_dir/wp-content/uploads"
+    tar -czf data.tar.gz -C "$webserver_dir" wp-content/uploads
+    mysqldump --defaults-file="$defaults_file" --no-tablespaces --host "$wp_db_host" "$wp_db_name" | gzip -c > "$wordpress_db_file"
+
+    ls -lh | grep .gz
+EOF
+}
+
+download() {
+  log_info "Download files from remote connection"
+  environment="$1"
+  environment_upper=$(echo "$1" | tr [":lower:"] [":upper:"])
+
+  connection=$(name="BAITANDO_${environment_upper}_CONNECTION" && echo "${!name}")
+  remote_devops_dir=$(name="BAITANDO_${environment_upper}_REMOTE_DEVOPS_DIR" && echo "${!name}")
+  devops_dir="$BAITANDO_EXPORT_DIR/$environment"
+
+  wordpress_webserver_file="$remote_devops_dir/data.tar.gz"
+  wordpress_database_file="$remote_devops_dir/db.sql.gz"
+
+  scp "$connection":"$wordpress_webserver_file" "$devops_dir/"
+  scp "$connection":"$wordpress_database_file" "$devops_dir/"
+
+    ssh -T "$connection" "bash -s $remote_devops_dir" <<'EOF'
+    devops_dir=$1
+
+    wordpress_data_file="$devops_dir/data.tar.gz"
+    wordpress_db_file="$devops_dir/db.sql.gz"
+
+    mkdir -p "$devops_dir"
+    rm -f "$wordpress_data_file"
+    rm -f "$wordpress_db_file"
+    rm -f "$defaults_file"
+
+    ls -lh | grep .gz
+EOF
+}
+
+case "$1" in
+help | h)
+  cli_help_devops
+  ;;
+prod)
+  cli_devops prod
+  ;;
+test)
+  cli_devops test
+  ;;
+*)
+  cli_help_devops
+  ;;
+esac

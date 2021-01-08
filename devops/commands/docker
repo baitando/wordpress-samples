@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -e
+. "$BAITANDO_WORKDIR/common"
+
+cli_help_docker() {
+  echo "
+Command: docker
+
+Dockerizes the website and initializes it with given data.
+"
+  exit 0
+}
+
+cli_init() {
+  log_info "Executing initialization"
+
+  check
+  clean
+  start_sync
+  prepare
+  stop_sync
+
+  log_info "Initialization finished"
+}
+
+cli_destroy() {
+  log_info "Executing destroy"
+
+  check
+  stop_sync
+  destroy
+  clean
+  clean_sync
+
+  log_info "Initialization finished"
+}
+
+cli_start() {
+  log_info "Executing start"
+
+  check
+  start_sync
+  start
+
+  log_info "Start finished"
+}
+
+cli_stop() {
+  log_info "Executing stop"
+
+  check
+  stop
+  stop_sync
+
+  log_info "Stop finished"
+}
+
+start() {
+  config_dir="$BAITANDO_LOCAL_CONFIG_DIR"
+  docker-compose -f "$config_dir/docker-compose.yml" start
+}
+
+stop() {
+  config_dir="$BAITANDO_LOCAL_CONFIG_DIR"
+  docker-compose -f "$config_dir/docker-compose.yml" stop
+}
+
+destroy() {
+  config_dir="$BAITANDO_LOCAL_CONFIG_DIR"
+  docker-compose -f "$config_dir/docker-compose.yml" down
+}
+
+check() {
+  log_info "Checking prerequisites"
+  check_required_variable "BAITANDO_BUILD_DIR"
+  check_required_variable "BAITANDO_EXPORT_DIR"
+  check_required_variable "BAITANDO_LOCAL_VOLUME_DIR"
+  check_required_variable "BAITANDO_LOCAL_IMPORT_ENV"
+}
+
+clean() {
+  volume_dir="$BAITANDO_LOCAL_VOLUME_DIR"
+  db_volume_dir="$volume_dir/database"
+  web_volume_dir="$volume_dir/webserver"
+
+  log_info "Clean volumes in directory $volume_dir"
+  rm -rf "$volume_dir"
+  mkdir -p "$db_volume_dir"
+  mkdir -p "$web_volume_dir"
+}
+
+function start_sync() {
+  config_dir="$BAITANDO_LOCAL_CONFIG_DIR"
+  pushd "$config_dir" >/dev/null
+  docker-sync start
+  popd >/dev/null
+}
+
+function stop_sync() {
+  config_dir="$BAITANDO_LOCAL_CONFIG_DIR"
+  pushd "$config_dir" >/dev/null
+  docker-sync stop
+  popd >/dev/null
+}
+
+function clean_sync() {
+  config_dir="$BAITANDO_LOCAL_CONFIG_DIR"
+  pushd "$config_dir" >/dev/null
+  docker-sync clean
+  popd >/dev/null
+}
+
+prepare() {
+  config_dir="$BAITANDO_LOCAL_CONFIG_DIR"
+  volume_dir="$BAITANDO_LOCAL_VOLUME_DIR"
+  db_volume_dir="$volume_dir/database"
+  web_volume_dir="$volume_dir/webserver"
+
+  src_env="$BAITANDO_LOCAL_IMPORT_ENV"
+  src_env_upper=$(echo "$src_env" | tr [":lower:"] [":upper:"])
+  src_siteurl=$(name="BAITANDO_${src_env_upper}_SITEURL" && echo "${!name}")
+  data_dir="$BAITANDO_EXPORT_DIR/$src_env"
+  build_dir="$BAITANDO_BUILD_DIR"
+
+  gunzip < "$data_dir/db.sql.gz" | sed -e 's/DEFINER[ ]*=[ ]*[^*]*\*/\*/' > "$db_volume_dir/database.sql"
+  tar -C "$web_volume_dir" -xzf "$data_dir/data.tar.gz"
+
+  cp -r "$build_dir/" "$web_volume_dir"
+
+  docker-compose -f "$config_dir/docker-compose.yml" build
+  docker-compose -f "$config_dir/docker-compose.yml" up -d
+  sleep 45
+
+  docker-compose -f "$config_dir/docker-compose.yml" run --rm wordpress-cli config create \
+    --dbname="wordpress" \
+    --dbuser="wordpress" \
+    --dbpass="wordpress" \
+    --dbhost="database" \
+    --dbprefix="bcq_" \
+    --skip-check
+
+  docker-compose -f "$config_dir/docker-compose.yml" run --rm wordpress-cli search-replace "$src_siteurl" "http://localhost" "*"
+  docker-compose -f "$config_dir/docker-compose.yml" stop
+}
+
+case "$1" in
+help | h)
+  cli_help_docker
+  ;;
+init | i)
+  cli_init
+  ;;
+destroy | d)
+  cli_destroy
+  ;;
+start | t)
+  cli_start
+  ;;
+stop | p)
+  cli_stop
+  ;;
+*)
+  cli_help_docker
+  ;;
+esac

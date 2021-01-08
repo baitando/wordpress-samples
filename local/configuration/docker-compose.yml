@@ -1,0 +1,36 @@
+version: '3.1'
+
+services:
+  database:
+    build: database
+    command: --default-authentication-plugin=mysql_native_password
+    restart: always
+    environment:
+      MYSQL_RANDOM_ROOT_PASSWORD: "true"
+      MYSQL_USER: "wordpress"
+      MYSQL_PASSWORD: "wordpress"
+      MYSQL_DATABASE: "wordpress"
+      MYSQL_ROOT_HOST: "%"
+    volumes:
+      - ../volumes/database:/docker-entrypoint-initdb.d:delegated
+    ports:
+      - "3306:3306"
+  webserver:
+    build: webserver
+    restart: always
+    user: 1000:1000
+    volumes:
+      - webserver-volume:/var/www/html:nocopy
+    ports:
+      - "80:80"
+
+  wordpress-cli:
+    image: wordpress:cli-php7.2
+    user: 1000:1000
+    volumes:
+      - webserver-volume:/var/www/html:nocopy
+    working_dir: /var/www/html
+
+volumes:
+  webserver-volume:
+    external: true

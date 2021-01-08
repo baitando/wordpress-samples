@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+# Inspired by https://medium.com/@brotandgames/build-a-custom-cli-with-bash-e3ce60cfb9a4
+set -e
+BAITANDO_ROOTDIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export BAITANDO_ROOTDIR
+
+BAITANDO_WORKDIR="${BAITANDO_ROOTDIR}"/devops
+export BAITANDO_WORKDIR
+
+. "$BAITANDO_WORKDIR/common"
+
+cli_help() {
+  cli_name=${0##*/}
+  echo "
+Sample Wordpress DevOps CLI provided by baitando
+
+Usage: $cli_name [command]
+Commands:
+  build     Build environment agnostic release
+  export    Export data of an environment
+  import    Import data to an environment
+  init      Initialize an environment
+  deploy    Deploy Wordpress to an environment
+  help      Show help
+"
+  exit 1
+}
+
+set -a
+source "${BAITANDO_WORKDIR}/defaults"
+source "${BAITANDO_ROOTDIR}/config"
+set +a
+
+log_info "Reading configured variables"
+env | grep "BAITANDO_*"
+
+case "$1" in
+build | b)
+  "$BAITANDO_WORKDIR/commands/build" "$2"
+  ;;
+export | e)
+  "$BAITANDO_WORKDIR/commands/export" "$2"
+  ;;
+import | p)
+  "$BAITANDO_WORKDIR/commands/import" "$2"
+  ;;
+init | i)
+  "$BAITANDO_WORKDIR/commands/init" "$2"
+  ;;
+deploy | d)
+  "$BAITANDO_WORKDIR/commands/deploy" "$2"
+  ;;
+docker | l)
+  "$BAITANDO_WORKDIR/commands/docker" "$2"
+  ;;
+*)
+  cli_help
+  ;;
+esac
+
+log_duration
